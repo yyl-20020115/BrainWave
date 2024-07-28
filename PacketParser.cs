@@ -54,6 +54,7 @@ public class PacketParser
     public const int PARSER_CODE_HEARTRATE = 0x03;
     public const int PARSER_CODE_ATTENTION = 0x04;
     public const int PARSER_CODE_MEDIATION = 0x05;
+    public const int PARSER_CODE_BLINK_STRENGTH = 0x16;
     public const int PARSER_CODE_RAW = 0x80;
     public const int PARSER_CODE_DEBUG_ONE = 0x84;
     public const int PARSER_CODE_DEBUG_TWO = 0x85;
@@ -91,7 +92,7 @@ public class PacketParser
 
     private readonly byte[] payload = new byte[0x100];
 
-    public int Signal { get; protected set; } = 0;
+    public int PoorSignal { get; protected set; } = 0;
     public int Delta { get; protected set; } = 0;
     public int Theta { get; protected set; } = 0;
     public int LowAlpha { get; protected set; } = 0;
@@ -101,6 +102,7 @@ public class PacketParser
     public int LowGamma { get; protected set; } = 0;
     public int MiddleGamma { get; protected set; } = 0;
 
+    public int BlinkStrength { get; protected set; } = 0;
     public int Attention { get; protected set; } = 0;
     public int HeartRate { get; protected set; } = 0;
     public int Mediation { get; protected set; } = 0;
@@ -186,12 +188,14 @@ public class PacketParser
             {
                 if ((valueBytesLength == RAW_DATA_BYTE_LENGTH))
                 {
-                    byte highOrderByte = this.payload[i];
-                    byte lowOrderByte = this.payload[(i + 1)];
-                    RawWaveData = GetRawWaveValue(highOrderByte, lowOrderByte);
-                    if (RawWaveData > 32768) RawWaveData = 65536;
+                    RawWaveData = GetRawWaveValue(i);
+                    //if (RawWaveData > 32768) RawWaveData -= 65536;
 
                     //Console.WriteLine("Raw:" + rawWaveData);
+                }
+                else
+                {
+
                 }
                 i += valueBytesLength;
             }
@@ -200,27 +204,27 @@ public class PacketParser
                 switch (code)
                 {
                     case PARSER_CODE_POOR_SIGNAL:
-                        Signal = this.payload[i] & 0xFF;
+                        PoorSignal = this.payload[i] & 0xFF;
                         i += valueBytesLength;
                         break;
                     case PARSER_CODE_EEG_POWER:
                         //EEGLength = this.payload[i] & 0xFF;
-                        if (valueBytesLength>=24 && i + valueBytesLength <= this.payload.Length)
+                        if (valueBytesLength >= 24 && i + valueBytesLength <= this.payload.Length)
                         {
-                            Delta = GetValueFrom(i + 0);
-                            Theta = GetValueFrom(i + 3);
-                            LowAlpha = GetValueFrom(i + 6);
-                            HighAlpha = GetValueFrom(i + 9);
-                            LowBeta = GetValueFrom(i + 12);
-                            HighBeta = GetValueFrom(i + 15);
-                            LowGamma = GetValueFrom(i + 18);
-                            MiddleGamma = GetValueFrom(i + 21);
+                            Delta = GetParameterValue(i + 0);
+                            Theta = GetParameterValue(i + 3);
+                            LowAlpha = GetParameterValue(i + 6);
+                            HighAlpha = GetParameterValue(i + 9);
+                            LowBeta = GetParameterValue(i + 12);
+                            HighBeta = GetParameterValue(i + 15);
+                            LowGamma = GetParameterValue(i + 18);
+                            MiddleGamma = GetParameterValue(i + 21);
                         }
                         i += valueBytesLength;
                         break;
                     case PARSER_CODE_ATTENTION:
                         //Signal 等于以下值，代表耳机没有戴好
-                        if (Signal is 29 or 54 or 55 or 56 or 80 or 81 or 82 or 107 or 200)
+                        if (PoorSignal is 29 or 54 or 55 or 56 or 80 or 81 or 82 or 107 or 200)
                         {
                             Attention = this.payload[i] & 0xFF;
                             IsEarphoneError = true;
@@ -253,26 +257,19 @@ public class PacketParser
                         Mediation = this.payload[i] & 0xFF;
                         i += valueBytesLength;
                         break;
+                    case PARSER_CODE_BLINK_STRENGTH:
+                        BlinkStrength = this.payload[i] & 0xFF;
+                        i+= valueBytesLength; 
+                        break;
                 }
             }
         }
         this.parserState = ParserState.Sync;
     }
 
-    private int GetValueFrom(int v)
-        => this.payload[v] << 16 | (this.payload[v + 1] << 8) | (this.payload[v + 2]);
+    private int GetParameterValue(int i)
+        => this.payload[i] << 16 | (this.payload[i + 1] << 8) | (this.payload[i + 2]);
 
-    private static int GetRawWaveValue(byte highOrderByte, byte lowOrderByte)
-    {
-        /* Signextend
-        the signed high byte to the width of a signed int */
-        int hi = (int)highOrderByte;
-        /* Extend low to the width of an int, but keep exact bits instead of signextending
-        */
-        int lo = ((int)lowOrderByte) & 0xFF;
-        /* Calculate raw value by appending the exact low bits to the signextended
-        high bits */
-        int value = (hi << 8) | lo;
-        return (value);
-    }
+    private short GetRawWaveValue(int i)
+        => (short)((short)((this.payload[i + 0]) << 8) | (short)this.payload[i + 1]);
 }

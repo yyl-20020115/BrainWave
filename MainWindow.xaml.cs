@@ -1,11 +1,10 @@
-﻿using ScottPlot.Plottables;
-using System.Diagnostics;
-using System.IO.Ports;
+﻿using System.IO.Ports;
 using System.Windows;
-using System.Windows.Documents;
 using System.Windows.Threading;
-using System.Xml.Linq;
+using ScottPlot.Plottables;
+
 namespace BrainWave;
+
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
@@ -15,7 +14,7 @@ public partial class MainWindow : Window
     protected SerialPort? port = null;
     protected DispatcherTimer timer = new();
 
-    private readonly DataStreamer SignalStreamer;
+    private readonly DataStreamer PoorSignalStreamer;
 
     private readonly DataStreamer BrainWaveStreamer;
     private readonly DataStreamer AttentionStreamer;
@@ -32,23 +31,34 @@ public partial class MainWindow : Window
     private readonly DataStreamer MiddleGammaStreamer;
 
 
-    private const int StreamLength = 1000;
+    private const int StreamLength = 800;
     private const int SlowStreamLength = 20;
+
+    public class ListItem(int ComPort = -1)
+    {
+        public static ListItem Parse(string? name)
+            => new(!string.IsNullOrEmpty(name)
+                && name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(name[3..], out var n) ? n : -1);
+        public readonly int ComPort = ComPort;
+        public override string ToString()
+            => this.ComPort >= 0 ? $"COM{this.ComPort}" : string.Empty;
+    }
+
     public MainWindow()
     {
         InitializeComponent();
-        
-        this.BrainWavePlot.Plot.Axes.SetLimitsY(-1.5, 1.5);
+
 
         this.BrainWaveStreamer = this.BrainWavePlot.Plot.Add.DataStreamer(StreamLength);
         this.BrainWaveStreamer.LegendText = "Wave";
         this.BrainWaveStreamer.Renderer = new ScottPlot.DataViews.Scroll(this.BrainWaveStreamer, true);
 
 
-        this.SignalStreamer = this.DataPlot.Plot.Add.DataStreamer(StreamLength);
-        this.SignalStreamer.LegendText = "Signal";
-        
-        this.SignalStreamer.Renderer = new ScottPlot.DataViews.Scroll(this.SignalStreamer,true);
+        this.PoorSignalStreamer = this.DataPlot.Plot.Add.DataStreamer(StreamLength);
+        this.PoorSignalStreamer.LegendText = "PoorSignal";
+
+        this.PoorSignalStreamer.Renderer = new ScottPlot.DataViews.Scroll(this.PoorSignalStreamer, true);
 
 
         this.AttentionStreamer = this.DataPlot.Plot.Add.DataStreamer(StreamLength);
@@ -115,50 +125,36 @@ public partial class MainWindow : Window
     {
         this.OnUpdateList();
     }
-    protected class ListItem
-    {
-        public static ListItem Parse(string name)
-            => !string.IsNullOrEmpty(name) && name.StartsWith("COM", StringComparison.OrdinalIgnoreCase) && int.TryParse(name[3..], out var n)
-                ? new ListItem { ComPort = n }
-                : new ListItem();
-
-        public int ComPort = -1;
-        public override string ToString()
-            => this.ComPort >= 0 ? $"COM{this.ComPort}" : string.Empty;
-    }
     protected virtual void OnUpdateList()
     {
         if (!this.StartButton.IsChecked.GetValueOrDefault())
         {
-            var items = SerialPort.GetPortNames()
-                .Select(name=>ListItem.Parse(name)).ToList();
-            var olds = new List<ListItem>();
+            var knowns = new List<ListItem>();
             foreach (var item in this.ComPortsList.Items)
-                olds.Add(ListItem.Parse(item.ToString() ?? string.Empty)??new ListItem());
-            
-            var do_update = !Enumerable.SequenceEqual(
-                items.OrderBy(i=>i.ComPort), 
-                olds.OrderBy(i=>i.ComPort));
+                knowns.Add(ListItem.Parse(item.ToString()) ?? new());
 
-            if (do_update)
+            var founds = SerialPort
+                .GetPortNames()
+                .Select(name => ListItem.Parse(name))
+                .ToList()
+                ;
+
+            if (!Enumerable.SequenceEqual(
+                founds.OrderBy(i => i.ComPort),
+                knowns.OrderBy(i => i.ComPort)))
             {
-                var selection = 
-                    (this.ComPortsList.SelectedItem as ListItem)?.ComPort??-1;
-
+                var selection =
+                    (this.ComPortsList.SelectedItem as ListItem)?.ComPort ?? -1;
                 this.ComPortsList.Items.Clear();
-                if (items.Count > 0) {
-                    foreach (var item in items)
+                if (founds.Count > 0)
+                {
+                    foreach (var item in founds)
                         this.ComPortsList.Items.Add(item);
-
-                    if (selection == -1)
-                    {
-                        this.ComPortsList.SelectedIndex = 0;
-                    }
-                    else
-                    {
-                        this.ComPortsList.SelectedItem 
-                            = items.FirstOrDefault(i => i.ComPort == selection);
-                    }
+                    this.ComPortsList.SelectedItem
+                        = selection == -1
+                        ? founds[0]
+                        : (object?)founds.FirstOrDefault(i => i.ComPort == selection)
+                        ;
                 }
             }
         }
@@ -183,7 +179,7 @@ public partial class MainWindow : Window
                         }
 
                         {
-                            SignalStreamer.Add(parser.Signal);
+                            PoorSignalStreamer.Add(parser.PoorSignal);
                             AttentionStreamer.Add(parser.Attention);
                             HeartRateStreamer.Add(parser.HeartRate);
                             MediationStreamer.Add(parser.Mediation);
@@ -223,11 +219,22 @@ public partial class MainWindow : Window
             this.port.Dispose();
             this.port = null;
         }
+        try
+        {
+            this.port = new SerialPort(ComPortsList.Text, 57600, Parity.None, 8, StopBits.One)
+            {
+                ReadBufferSize = 8 * 512 + 0
+            };
+            this.port.DataReceived += Port_DataReceived;
 
-        this.port = new SerialPort(ComPortsList.Text, 57600, Parity.None, 8, StopBits.One);
-        this.port.ReadBufferSize = 8 * 512 + 0;
-        this.port.DataReceived += Port_DataReceived;
-        this.port.Open();
+            this.port.Open();
+        }
+        catch (Exception ex)
+        {
+            this.port = null;
+            MessageBox.Show(ex.Message, "ERROR");
+            this.StartButton.IsChecked = false;
+        }
     }
 
     private void StartButton_Unchecked(object sender, RoutedEventArgs e)
