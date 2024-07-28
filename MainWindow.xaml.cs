@@ -2,7 +2,9 @@
 using System.Diagnostics;
 using System.IO.Ports;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Threading;
+using System.Xml.Linq;
 namespace BrainWave;
 
 /// <summary>
@@ -113,38 +115,56 @@ public partial class MainWindow : Window
     {
         this.OnUpdateList();
     }
+    protected class ListItem
+    {
+        public static ListItem Parse(string name)
+            => !string.IsNullOrEmpty(name) && name.StartsWith("COM", StringComparison.OrdinalIgnoreCase) && int.TryParse(name[3..], out var n)
+                ? new ListItem { ComPort = n }
+                : new ListItem();
 
+        public int ComPort = -1;
+        public override string ToString()
+            => this.ComPort >= 0 ? $"COM{this.ComPort}" : string.Empty;
+    }
     protected virtual void OnUpdateList()
     {
         if (!this.StartButton.IsChecked.GetValueOrDefault())
         {
-            var names = SerialPort.GetPortNames().ToList();
-            var olds = new List<string>();
+            var items = SerialPort.GetPortNames()
+                .Select(name=>ListItem.Parse(name)).ToList();
+            var olds = new List<ListItem>();
             foreach (var item in this.ComPortsList.Items)
-                olds.Add(item.ToString() ?? string.Empty);
-            var do_update = true;
-            if (names.Count == olds.Count)
-            {
-                var _names = names.ToList();
-                var _olds = olds.ToList();
-                _names.Sort();
-                _olds.Sort();
-                do_update = !Enumerable.SequenceEqual(_names, _olds);
-            }
+                olds.Add(ListItem.Parse(item.ToString() ?? string.Empty)??new ListItem());
+            
+            var do_update = !Enumerable.SequenceEqual(
+                items.OrderBy(i=>i.ComPort), 
+                olds.OrderBy(i=>i.ComPort));
+
             if (do_update)
             {
-                var selection = this.ComPortsList.SelectedIndex;
+                var selection = 
+                    (this.ComPortsList.SelectedItem as ListItem)?.ComPort??-1;
+
                 this.ComPortsList.Items.Clear();
-                foreach (var name in names) this.ComPortsList.Items.Add(name);
-                if (selection == -1) this.ComPortsList.SelectedIndex = 0;
+                if (items.Count > 0) {
+                    foreach (var item in items)
+                        this.ComPortsList.Items.Add(item);
+
+                    if (selection == -1)
+                    {
+                        this.ComPortsList.SelectedIndex = 0;
+                    }
+                    else
+                    {
+                        this.ComPortsList.SelectedItem 
+                            = items.FirstOrDefault(i => i.ComPort == selection);
+                    }
+                }
             }
         }
     }
     //protected readonly 
     private readonly PacketParser parser = new();
-    private const double Max24 = 1;
-    private const double Max16 = 1 << 16;
-    private const double Max8 = 1 << 8;
     private void Port_DataReceived(object sender, SerialDataReceivedEventArgs e)
     {
         if (this.port != null && e.EventType == SerialData.Chars)
